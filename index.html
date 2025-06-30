@@ -33,21 +33,26 @@
             db = getFirestore(app);
             auth = getAuth(app);
 
+            console.log("Firebase app initialized.");
+
             // Listen for authentication state changes
             onAuthStateChanged(auth, async (user) => {
                 if (user) {
                     userId = user.uid;
-                    console.log("Firebase initialized. User authenticated:", userId);
+                    console.log("Firebase authentication successful. User ID:", userId);
                     document.getElementById('currentUserIdDisplay').textContent = `User ID: ${userId}`;
                     // Load public sector data once authenticated
                     loadEcosystemData();
                 } else {
+                    console.log("No Firebase user found. Attempting anonymous sign-in or custom token...");
                     // Sign in anonymously if no user is found
                     try {
                         if (initialAuthToken) {
                             await signInWithCustomToken(auth, initialAuthToken);
+                            console.log("Signed in with custom token.");
                         } else {
                             await signInAnonymously(auth);
+                            console.log("Signed in anonymously.");
                         }
                     } catch (error) {
                         console.error("Firebase Anonymous Sign-in or Custom Token failed:", error);
@@ -72,11 +77,12 @@
             }
             const publicDataPath = `artifacts/${appId}/public/data`;
             const sectorsCollectionRef = collection(db, `${publicDataPath}/sectors`);
+            console.log(`Attempting to load data from Firestore collection: ${sectorsCollectionRef.path}`);
 
             // Check if collection is empty and seed if necessary
             const initialSnapshot = await getDocs(sectorsCollectionRef);
             if (initialSnapshot.empty) {
-                console.log("Seeding initial ecosystem data...");
+                console.log(`Firestore collection ${sectorsCollectionRef.path} is empty. Seeding initial data...`);
                 const defaultSectors = {
                     "agriculture": { name: "🌱 Agriculture & Biotech", repoName: "agriculture-seedwave-admin", baseUrl: "heyns1000/agriculture.seedwave.faa.zone", brands: [] },
                     "fsf": { name: "🥦 Food, Soil & Farming", repoName: "fsf-seedwave-admin", baseUrl: "heyns1000/fsf.seedwave.faa.zone", brands: [] },
@@ -141,9 +147,11 @@
 
                 for (const key in defaultSectors) {
                     if (defaultSectors.hasOwnProperty(key)) {
+                        console.log(`Seeding document: ${key}`);
                         await setDoc(doc(db, sectorsCollectionRef.path, key), defaultSectors[key]);
                     }
                 }
+                console.log("Initial ecosystem data seeding complete.");
             }
 
             onSnapshot(sectorsCollectionRef, (snapshot) => {
@@ -151,7 +159,7 @@
                 snapshot.forEach((doc) => {
                     allSectorsData[doc.id] = doc.data();
                 });
-                console.log("Loaded public sector data:", allSectorsData);
+                console.log("Firestore data received via onSnapshot:", allSectorsData);
                 renderMenu(); // Re-render the menu when data changes
             }, (error) => {
                 console.error("Error listening to sectors collection:", error);
@@ -161,6 +169,7 @@
 
         // Add a simplified version of callGeminiAPI for this context
         window.callGeminiAPI = async function(prompt, statusElement, buttonElement, type) {
+            console.log(`Calling Gemini API for type: ${type}`);
             if (!statusElement || !buttonElement) {
                 console.error("Missing status element or button element for Gemini API call.");
                 return null;
@@ -184,6 +193,7 @@
                 });
 
                 const result = await response.json();
+                console.log("Gemini API response:", result);
                 
                 if (result.candidates && result.candidates.length > 0 &&
                     result.candidates[0].content && result.candidates[0].content.parts &&
@@ -208,6 +218,8 @@
                     originalButtonText = 'Generate Overview';
                 } else if (type === 'Suggest Integration') {
                     originalButtonText = 'Suggest Integration Steps';
+                } else if (type === 'Suggest Slogans') {
+                    originalButtonText = 'Suggest Marketing Slogans';
                 }
                 buttonElement.innerHTML = `<i class="fas fa-magic"></i> ✨ ${originalButtonText}`; // Using magic wand icon
                 setTimeout(() => statusElement.classList.add('hidden'), 3000);
@@ -255,6 +267,28 @@
                 window.showCustomModal(`Integration Steps: ${sector.name}`, integrationStepsText);
             } else {
                 window.showCustomModal('Integration Suggestion Failed', 'Could not generate integration steps. Please try again.');
+            }
+        };
+
+        // NEW: Function for suggesting marketing slogans
+        window.suggestMarketingSlogans = async function(key, buttonElement) {
+            const statusElementId = `slogansStatus-${key.replace(/[^a-zA-Z0-9]/g, '-')}`;
+            const statusElement = document.getElementById(statusElementId);
+            const sector = allSectorsData[key];
+
+            if (!sector) {
+                window.showCustomModal('Error', 'Sector data not found for slogan generation.');
+                return;
+            }
+
+            const prompt = `Generate 3-5 short, catchy marketing slogans/taglines (max 15 words each, as a bulleted list) for "${sector.name}" (URL: ${sector.baseUrl}). Focus on its unique value proposition and target audience within the heyns1000/Seedwave FAA.Zone ecosystem. Provide only the slogans.`;
+            
+            const slogansText = await window.callGeminiAPI(prompt, statusElement, buttonElement, 'Suggest Slogans');
+
+            if (slogansText) {
+                window.showCustomModal(`Marketing Slogans: ${sector.name}`, slogansText);
+            } else {
+                window.showCustomModal('Slogan Generation Failed', 'Could not generate marketing slogans. Please try again.');
             }
         };
 
@@ -439,9 +473,13 @@
                             <button class="form-action-button secondary text-xs px-2 py-1" onclick="window.suggestIntegrationSteps('${key}', this)">
                                 <i class="fas fa-lightbulb"></i> ✨ Suggest Integration Steps
                             </button>
+                            <button class="form-action-button text-xs px-2 py-1 bg-green-600 hover:bg-green-700" onclick="window.suggestMarketingSlogans('${key}', this)">
+                                <i class="fas fa-bullhorn"></i> ✨ Suggest Marketing Slogans
+                            </button>
                         </div>
                         <p id="overviewStatus-${key.replace(/[^a-zA-Z0-9]/g, '-')}" class="text-xs text-gray-400 mt-1 hidden"></p>
                         <p id="integrationStatus-${key.replace(/[^a-zA-Z0-9]/g, '-')}" class="text-xs text-gray-400 mt-1 hidden"></p>
+                        <p id="slogansStatus-${key.replace(/[^a-zA-Z0-9]/g, '-')}" class="text-xs text-gray-400 mt-1 hidden"></p>
                     </div>
                 `;
                 menuContainer.appendChild(sectionDiv);
@@ -656,13 +694,13 @@
         .copy-square pre.conversation-code-block {
             background: none;
             border: none;
-            color: var(--text-color-light); 
+            color: var(--text-color-light); /* Ensure text is visible in dark mode */
             padding: 0;
             margin: 0;
             font-size: 0.85rem;
-            white-space: pre-wrap; 
-            word-break: break-all; 
-            padding-right: 40px; 
+            white-space: pre-wrap; /* Preserve formatting but wrap long lines */
+            word-break: break-all; /* Break long words if necessary */
+            padding-right: 40px; /* Make space for the copy button */
         }
         body.light-mode .copy-square pre.conversation-code-block {
             color: var(--text-color-dark);
@@ -698,7 +736,7 @@
         }
         .repo-content-section {
             padding-left: 1rem;
-            border-left: 2px solid var(--border-color-dark); 
+            border-left: 2px solid var(--border-color-dark); /* Indent and show hierarchy */
             margin-top: 1rem;
             padding-top: 0.5rem;
         }
@@ -706,9 +744,9 @@
             border-color: var(--light-border-color-dark);
         }
         .repo-content-section .toggle-section-btn {
-            font-size: 1rem; 
+            font-size: 1rem; /* Smaller for nested levels */
             font-weight: 500;
-            color: var(--text-color-light); 
+            color: var(--text-color-light); /* Nested sections use lighter text color */
         }
         body.light-mode .repo-content-section .toggle-section-btn {
             color: var(--text-color-dark);
@@ -897,3 +935,4 @@
     </div>
 </body>
 </html>
+
